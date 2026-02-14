@@ -9,12 +9,20 @@ export default function UploadOptions({ options, onChange }) {
   const [showPassword, setShowPassword] = useState(false);
   const [detectedIP, setDetectedIP] = useState(null);
 
-  // Fetch the user's IP as seen by the server
+  // Detect the user's real public IP.
+  // Uses ipify (external) so we get the actual public IP, not 127.0.0.1
+  // from the local backend. Falls back to server-detected IP if ipify is unreachable.
   useEffect(() => {
-    fetch(`${API_BASE_URL}/ip`)
+    fetch('https://api.ipify.org?format=json')
       .then(r => r.json())
-      .then(d => { if (d.success) setDetectedIP(d.data.ip); })
-      .catch(() => {});
+      .then(d => { if (d.ip) setDetectedIP(d.ip); })
+      .catch(() => {
+        // Fallback: ask the backend what IP it sees for us
+        fetch(`${API_BASE_URL}/ip`)
+          .then(r => r.json())
+          .then(d => { if (d.success) setDetectedIP(d.data.ip); })
+          .catch(() => {});
+      });
   }, []);
 
   // Local string state — allows clearing inputs without snapping to defaults

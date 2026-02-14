@@ -11,6 +11,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
         changeOrigin: true,
+        // Forward client IP so the backend can see real IPs even in dev
+        xfwd: true,
       },
     },
   },
