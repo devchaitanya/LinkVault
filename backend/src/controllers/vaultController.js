@@ -4,13 +4,29 @@ import { Vault } from '../models/index.js';
 import { generateDownloadSessionToken, verifyDownloadSessionToken } from '../middleware/auth.js';
 
 /**
+ * Normalize an IP address for comparison.
+ * Handles IPv4-mapped IPv6 (::ffff:1.2.3.4 → 1.2.3.4), loopback variants, etc.
+ */
+function normalizeIP(ip) {
+  if (!ip) return '';
+  let cleaned = ip.trim();
+  // Strip IPv4-mapped IPv6 prefix
+  if (cleaned.startsWith('::ffff:')) cleaned = cleaned.slice(7);
+  // Normalize loopback
+  if (cleaned === '::1' || cleaned === '0:0:0:0:0:0:0:1') cleaned = '127.0.0.1';
+  return cleaned;
+}
+
+/**
  * Check IP restrictions on a vault.
  */
 function checkIPRestriction(vault, clientIP) {
   if (vault.allowedIPs && vault.allowedIPs.length > 0) {
-    const normalizedIP = clientIP.replace('::ffff:', '');
-    if (!vault.allowedIPs.includes(normalizedIP)) {
-      throw new AppError(403, 'GEO_RESTRICTED', 'Access denied: your IP is not allowed');
+    const normalizedClient = normalizeIP(clientIP);
+    const allowed = vault.allowedIPs.map(normalizeIP);
+    if (!allowed.includes(normalizedClient)) {
+      throw new AppError(403, 'GEO_RESTRICTED',
+        `Access denied: your IP (${normalizedClient}) is not in the allowed list`);
     }
   }
 }
@@ -314,6 +330,20 @@ class VaultController {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
       },
+    });
+  }
+
+  /**
+   * GET /api/ip
+   * Returns the client's IP as seen by the server.
+   * Used by the frontend to help users set up IP restrictions.
+   */
+  async getClientIP(req, res) {
+    const raw = req.ip || req.socket?.remoteAddress || '';
+    const ip = normalizeIP(raw);
+    res.status(200).json({
+      success: true,
+      data: { ip },
     });
   }
 }

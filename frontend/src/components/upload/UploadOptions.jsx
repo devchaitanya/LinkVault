@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { DEFAULT_EXPIRY_MS, MAX_EXPIRY_MS, DEFAULT_MAX_VIEWS } from '../../config/constants.js';
+import { useState, useEffect } from 'react';
+import { DEFAULT_EXPIRY_MS, MAX_EXPIRY_MS, DEFAULT_MAX_VIEWS, API_BASE_URL } from '../../config/constants.js';
 
 /**
  * UploadOptions — expiry, view count, password configuration.
@@ -7,6 +7,15 @@ import { DEFAULT_EXPIRY_MS, MAX_EXPIRY_MS, DEFAULT_MAX_VIEWS } from '../../confi
  */
 export default function UploadOptions({ options, onChange }) {
   const [showPassword, setShowPassword] = useState(false);
+  const [detectedIP, setDetectedIP] = useState(null);
+
+  // Fetch the user's IP as seen by the server
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/ip`)
+      .then(r => r.json())
+      .then(d => { if (d.success) setDetectedIP(d.data.ip); })
+      .catch(() => {});
+  }, []);
 
   // Local string state — allows clearing inputs without snapping to defaults
   const totalMinInit = Math.round((options.expiryMs || DEFAULT_EXPIRY_MS) / 60_000);
@@ -152,7 +161,7 @@ export default function UploadOptions({ options, onChange }) {
           type="text"
           value={options.allowedIPs || ''}
           onChange={(e) => update('allowedIPs', e.target.value)}
-          placeholder="Comma-separated IPs, e.g. 192.168.1.1, 10.0.0.5"
+          placeholder="Comma-separated IPs, e.g. 203.0.113.5, 198.51.100.10"
           className="
             w-full px-4 py-2.5 rounded-lg
             bg-slate-800/50 border border-slate-600
@@ -161,8 +170,27 @@ export default function UploadOptions({ options, onChange }) {
             transition-all duration-200 text-sm
           "
         />
+        {detectedIP && (
+          <div className="flex items-center gap-2 mt-1.5">
+            <p className="text-xs text-slate-500">
+              Your IP: <span className="text-slate-400 font-mono">{detectedIP}</span>
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                const current = options.allowedIPs || '';
+                if (!current.includes(detectedIP)) {
+                  update('allowedIPs', current ? `${current}, ${detectedIP}` : detectedIP);
+                }
+              }}
+              className="text-xs text-blue-400 hover:text-blue-300 underline"
+            >
+              Add my IP
+            </button>
+          </div>
+        )}
         {options.allowedIPs && (
-          <p className="text-xs text-slate-500 mt-1.5">
+          <p className="text-xs text-slate-500 mt-1">
             Only these IP addresses can access the vault.
           </p>
         )}

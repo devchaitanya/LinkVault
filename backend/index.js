@@ -38,6 +38,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Trust proxy — needed for correct req.ip behind reverse proxies (Azure, nginx, etc.)
+app.set('trust proxy', true);
+
 // ─── Global Middleware ─────────────────────────────────────────
 app.use(securityHeaders());
 app.use(requestLogger());

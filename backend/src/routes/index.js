@@ -8,6 +8,9 @@ const router = Router();
 // Health check
 router.get('/health', vaultController.healthCheck.bind(vaultController));
 
+// Client IP detection (for IP restriction setup)
+router.get('/ip', vaultController.getClientIP.bind(vaultController));
+
 // Auth endpoints
 router.use('/auth', authRoutes);
 
