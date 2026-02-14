@@ -18,6 +18,40 @@ function normalizeIP(ip) {
 }
 
 /**
+ * Check if an IP is private/loopback (not a real public IP).
+ * In local dev, req.ip is always 127.0.0.1 or a LAN address — useless for
+ * comparing against the user's public IP from ipify.
+ */
+function isPrivateIP(ip) {
+  const normalized = normalizeIP(ip);
+  return (
+    normalized === '127.0.0.1' ||
+    normalized.startsWith('10.') ||
+    normalized.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(normalized) ||
+    normalized === '0.0.0.0' ||
+    normalized === '' 
+  );
+}
+
+/**
+ * Determine the best client IP for restriction checks.
+ * In production (behind a reverse proxy), req.ip is the real public IP.
+ * In local dev, req.ip is 127.0.0.1 — so we fall back to the
+ * X-Client-Public-IP header that the frontend sends (fetched from ipify).
+ */
+function resolveClientIP(req) {
+  const reqIP = normalizeIP(req.ip || req.socket?.remoteAddress || '');
+  // If req.ip is a real public IP (production), always trust it
+  if (!isPrivateIP(reqIP)) return reqIP;
+  // Local/private — check if the client sent its public IP
+  const clientHeader = req.headers['x-client-public-ip'];
+  if (clientHeader) return normalizeIP(clientHeader);
+  // No header — return whatever we have
+  return reqIP;
+}
+
+/**
  * Check IP restrictions on a vault.
  */
 function checkIPRestriction(vault, clientIP) {
@@ -160,7 +194,7 @@ class VaultController {
       // Check geofencing / IP restriction
       const vault = await Vault.findOne({ vaultId, uploadStatus: 'complete', isDeleted: false });
       if (vault) {
-        const clientIP = req.ip || req.connection?.remoteAddress || '';
+        const clientIP = resolveClientIP(req);
         checkIPRestriction(vault, clientIP);
       }
 
@@ -339,8 +373,7 @@ class VaultController {
    * Used by the frontend to help users set up IP restrictions.
    */
   async getClientIP(req, res) {
-    const raw = req.ip || req.socket?.remoteAddress || '';
-    const ip = normalizeIP(raw);
+    const ip = resolveClientIP(req);
     res.status(200).json({
       success: true,
       data: { ip },

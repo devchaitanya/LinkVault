@@ -135,10 +135,23 @@ class ApiService {
   /**
    * Access vault — consume a view and get chunk info + session token.
    * The session token is stored internally and automatically sent with chunk downloads.
+   * Sends the client's public IP via header so IP restriction works behind local proxies.
    */
   async accessVault(vaultId) {
+    // Detect real public IP so IP restriction works even on localhost
+    let publicIP;
+    try {
+      const ipRes = await fetch('https://api.ipify.org?format=json');
+      const ipData = await ipRes.json();
+      publicIP = ipData.ip;
+    } catch { /* best effort — backend falls back to req.ip */ }
+
+    const headers = {};
+    if (publicIP) headers['X-Client-Public-IP'] = publicIP;
+
     const result = await this._request(`/vaults/${vaultId}/access`, {
       method: 'POST',
+      headers,
     });
     // Store the download session token for subsequent chunk downloads
     if (result?.data?.sessionToken) {

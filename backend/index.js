@@ -47,7 +47,7 @@ app.use(requestLogger());
 app.use(cors({
   origin: env.corsOrigin,
   methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Download-Session'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Download-Session', 'X-Client-Public-IP'],
   exposedHeaders: ['X-Chunk-Hash', 'Content-Length'],
   maxAge: 86400,
 }));
