@@ -1,0 +1,414 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    stringstyle=\color{red!70!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    tabsize=2
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{LinkVault}
+\lhead{Design Document}
+\rfoot{Page \thepage}
+
+\title{\textbf{LinkVault} \\ \large Secure Ephemeral Content Sharing Platform \\ \vspace{0.5cm} \normalsize Design Lab -- Take-Home Assignment}
+\author{Chaitanya}
+\date{February 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\newpage
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Introduction}
+
+LinkVault is a web application for sharing text and files securely through generated links. The core idea: a user uploads content, gets a unique URL, and anyone with that URL can access the content until it expires.
+
+What makes LinkVault different from a basic Pastebin clone is that all encryption happens in the browser. The server stores only encrypted blobs and metadata. Even if the database is compromised, content remains unreadable because the decryption key never leaves the client.
+
+The application satisfies all base requirements from the assignment (upload text/files, unique shareable URLs, link-only access, automatic expiry, copy/download) and implements several bonus features: password protection, one-time view links, max view counts, manual deletion, user accounts with a dashboard, file validation, background cleanup, and IP-based access control.
+
+% ============================================================
+\section{Tech Stack}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Layer} & \textbf{Technology} \\
+\midrule
+Frontend & React 19, Vite 7.3, Tailwind CSS v4 \\
+Backend & Node.js v20, Express 5 \\
+Database & MongoDB Atlas (Mongoose 8) \\
+Object Storage & Azure Blob Storage \\
+Auth & JWT (jsonwebtoken), bcrypt \\
+Encryption & Web Crypto API (AES-256-GCM, PBKDF2, HKDF) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Architecture Overview}
+
+The system has three layers:
+
+\begin{enumerate}
+    \item \textbf{React SPA} -- handles all UI, encryption/decryption, and key management. Communicates with the backend via REST API calls.
+    \item \textbf{Express API server} -- handles vault lifecycle (create, upload chunks, finalize, access, download, delete), user auth, rate limiting, and input validation.
+    \item \textbf{Storage layer} -- MongoDB stores vault metadata and policy; Azure Blob Storage stores encrypted binary chunks.
+\end{enumerate}
+
+The critical security boundary: the browser does all crypto work. The server processes only ciphertext.
+
+% ============================================================
+\section{Data Flow}
+
+\subsection{Upload Flow}
+
+\begin{enumerate}
+    \item User selects a file or types text in the browser.
+    \item Browser generates a random 256-bit AES key using \texttt{crypto.subtle.generateKey()}.
+    \item If the user sets a password, the browser derives a combined key: PBKDF2(password, salt) $\rightarrow$ HKDF(url\_key, derived\_password\_key) $\rightarrow$ final encryption key.
+    \item File is split into chunks (2 MB each by default).
+    \item Each chunk is encrypted with AES-256-GCM using the generated key. Each chunk gets a unique 12-byte IV.
+    \item SHA-256 hash is computed over each encrypted chunk. A Merkle tree is built from these hashes.
+    \item Browser sends \texttt{POST /api/vaults} with metadata (total size, expected chunks, Merkle root, crypto parameters, access policy).
+    \item Server creates a Vault document in MongoDB with status \texttt{pending}, generates a nanoid vault ID and a delete token.
+    \item Browser uploads each encrypted chunk: \texttt{POST /api/vaults/:id/chunks} with the binary in a FormData field.
+    \item Server streams each chunk to Azure Blob Storage under key \texttt{\{vaultId\}/chunk-\{index\}}.
+    \item Browser calls \texttt{POST /api/vaults/:id/finalize}. Server verifies all chunks received and sets status to \texttt{complete}.
+    \item Browser constructs the share URL: \texttt{/vault/\{vaultId\}\#k=\{base64Key\}}. The key is in the URL fragment (hash), which is \textbf{never sent to the server} by any browser.
+\end{enumerate}
+
+\subsection{Download Flow}
+
+\begin{enumerate}
+    \item Recipient opens the share URL. React extracts the key from the hash fragment.
+    \item Browser fetches vault metadata: \texttt{GET /api/vaults/:id}. This does not consume a view.
+    \item If password-protected, user enters password. Browser verifies it locally using the \texttt{passwordCheck} field (decrypts a known test value) -- wrong passwords are caught here without hitting the view counter.
+    \item Browser calls \texttt{POST /api/vaults/:id/access}. Server atomically decrements \texttt{remainingViews} using MongoDB's \texttt{\$inc} operator and returns chunk metadata + a 5-minute download session JWT.
+    \item For each chunk, browser calls \texttt{GET /api/vaults/:id/chunks/:i} with the session token in an \texttt{X-Download-Session} header. Server streams the encrypted blob from Azure.
+    \item Browser decrypts each chunk with AES-256-GCM, verifies the SHA-256 hash matches.
+    \item After all chunks: verify Merkle root, reassemble file, decrypt filename, trigger download (or display text).
+\end{enumerate}
+
+\subsection{Expiry and Cleanup}
+
+\begin{itemize}
+    \item Default expiry: 10 minutes. Configurable up to 24 hours per vault.
+    \item MongoDB TTL index on \texttt{expiresAt} auto-removes expired documents.
+    \item A cron job runs every 5 minutes inside the Node.js process: finds expired/deleted vaults, deletes their blobs from Azure, then removes the MongoDB documents.
+    \item Stale pending uploads (no activity for 1 hour) are also cleaned up.
+\end{itemize}
+
+% ============================================================
+\section{Database Schema}
+
+\subsection{Vault Collection}
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+vaultId & String & Unique nanoid, 21 chars ($\sim$128-bit entropy) \\
+chunks & Array & \{index, blobKey, size, hash\} per chunk \\
+totalSize & Number & Total encrypted size in bytes \\
+encryptedFilename & String & AES-GCM encrypted original filename \\
+displayName & String & Plaintext name for owner dashboard \\
+mimeType & String & MIME type hint \\
+contentType & String & \texttt{'text'} or \texttt{'file'} \\
+deleteTokenHash & String & SHA-256 of the delete token \\
+userId & ObjectId & Reference to User (nullable) \\
+allowedIPs & [String] & IP whitelist \\
+merkleRoot & String & Merkle root over chunk hashes \\
+metadataHmac & String & HMAC for tamper detection \\
+cryptoParams & Object & Algorithm, key length, IV length, salt, etc. \\
+policy.maxViews & Number & Maximum views allowed \\
+policy.maxFailedAttempts & Number & Lockout threshold (default 10) \\
+remainingViews & Number & Decremented atomically per access \\
+failedAttempts & Number & Failed password attempts \\
+expiresAt & Date & TTL index triggers auto-deletion \\
+isDeleted & Boolean & Soft delete flag \\
+uploadStatus & String & \texttt{pending} $|$ \texttt{complete} $|$ \texttt{failed} \\
+expectedChunks & Number & How many chunks to expect \\
+createdAt & Date & Mongoose timestamp \\
+updatedAt & Date & Mongoose timestamp \\
+\bottomrule
+\end{longtable}
+
+\textbf{Indexes:}
+\begin{itemize}[nosep]
+    \item \texttt{vaultId} -- unique, primary lookup
+    \item \texttt{expiresAt} -- TTL index (MongoDB auto-deletes)
+    \item \texttt{(uploadStatus, createdAt)} -- cleanup queries
+    \item \texttt{userId} -- dashboard queries
+\end{itemize}
+
+\subsection{User Collection}
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+email & String & Unique, lowercase \\
+username & String & Unique, 3--30 chars \\
+passwordHash & String & bcrypt hash (12 rounds) \\
+createdAt & Date & Account creation timestamp \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{API Design}
+
+All endpoints are prefixed with \texttt{/api}.
+
+\subsection{Vault Endpoints (\texttt{/api/vaults})}
+
+\begin{longtable}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Path} & \textbf{Description} \\
+\midrule
+\endhead
+POST & \texttt{/} & Initialize vault upload session. Body: totalSize, expectedChunks, merkleRoot, cryptoParams, policy. Returns vaultId and deleteToken. \\
+POST & \texttt{/:id/chunks} & Upload one encrypted chunk via FormData. \\
+POST & \texttt{/:id/finalize} & Mark upload as complete after all chunks uploaded. \\
+DELETE & \texttt{/:id/upload} & Abort a pending upload. \\
+GET & \texttt{/:id} & Get vault metadata. No view consumed. \\
+POST & \texttt{/:id/access} & Consume one view. Returns chunk list and session token. \\
+GET & \texttt{/:id/chunks/:i} & Download one encrypted chunk. Requires session token. \\
+DELETE & \texttt{/:id} & Delete vault (needs delete token or auth). \\
+POST & \texttt{/:id/fail} & Record failed access attempt. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Auth Endpoints (\texttt{/api/auth})}
+
+\begin{longtable}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Path} & \textbf{Description} \\
+\midrule
+\endhead
+POST & \texttt{/register} & Create account. \\
+POST & \texttt{/login} & Authenticate, get JWT. \\
+GET & \texttt{/me} & Get current user profile. \\
+GET & \texttt{/me/vaults} & List user's vaults for dashboard. \\
+POST & \texttt{/me/vaults/:id/extend} & Extend expiry or add views to owned vault. \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Security Design}
+
+\subsection{Client-Side Encryption}
+
+\begin{itemize}
+    \item \textbf{Algorithm:} AES-256-GCM via Web Crypto API.
+    \item \textbf{Key generation:} \texttt{crypto.subtle.generateKey()} -- 256-bit random key.
+    \item \textbf{Per-chunk IV:} Each chunk gets a unique 12-byte random IV appended to the ciphertext.
+    \item \textbf{Key transport:} The key is placed in the URL fragment (\texttt{\#k=base64key}). Browsers never send the fragment to servers. This is defined in RFC 3986.
+\end{itemize}
+
+\subsection{Password Protection}
+
+When a user sets a password:
+\begin{enumerate}
+    \item PBKDF2 derives a key from the password using a random salt (100,000 iterations, SHA-256).
+    \item HKDF combines the URL key and the password-derived key into a single final key.
+    \item A \texttt{passwordCheck} value is created: encrypt the string \texttt{"linkvault-password-check"} with the final key and store the ciphertext. On download, the recipient re-derives the key from their password input and tries to decrypt this check value. If it fails, the password is wrong -- and no view is consumed.
+\end{enumerate}
+
+\subsection{View Counting}
+
+Views are decremented atomically using MongoDB's \texttt{findOneAndUpdate} with \texttt{\$inc: \{remainingViews: -1\}} and a condition \texttt{remainingViews > 0}. This prevents race conditions where two simultaneous requests could both get the ``last'' view.
+
+\subsection{Rate Limiting}
+
+Three tiers:
+\begin{itemize}[nosep]
+    \item Global: 1000 requests per 15 minutes (dev) / 100 (prod)
+    \item Auth endpoints: 50 per minute (dev) / 10 (prod)
+    \item Upload endpoints: 100 per 15 minutes (dev) / 20 (prod)
+\end{itemize}
+
+\subsection{Other Measures}
+
+\begin{itemize}[nosep]
+    \item HMAC over vault metadata to detect server-side tampering.
+    \item Merkle tree over chunk hashes, verified client-side after download.
+    \item Short-lived download session tokens (5-minute JWT) for chunk downloads.
+    \item Security headers: HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy.
+    \item Input validation on both frontend and backend.
+\end{itemize}
+
+% ============================================================
+\section{Frontend Structure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Directory} & \textbf{Purpose} \\
+\midrule
+\texttt{pages/} & Route-level components: UploadPage, DownloadPage, DashboardPage, LoginPage, RegisterPage, NotFoundPage \\
+\texttt{components/upload/} & FileDropZone, TextInput, UploadOptions, ShareLink \\
+\texttt{components/download/} & VaultInfo, PasswordPrompt, TextViewer \\
+\texttt{components/common/} & Button, ProgressBar, StatusMessage \\
+\texttt{components/layout/} & Header, Footer, Layout \\
+\texttt{hooks/} & useUpload, useDownload, usePeerPresence \\
+\texttt{services/} & apiService (HTTP client), cryptoService (encryption) \\
+\texttt{context/} & AuthContext (login state) \\
+\texttt{utils/} & helpers, magicNumbers (file type detection) \\
+\texttt{config/} & constants \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Backend Structure}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Directory} & \textbf{Purpose} \\
+\midrule
+\texttt{config/} & Environment vars, DB connection, Azure storage config, Redis config \\
+\texttt{controllers/} & Request handlers (vaultController) \\
+\texttt{middleware/} & Auth (JWT), validation, rate limiting, error handling, security headers, request logging \\
+\texttt{models/} & Mongoose schemas: Vault, User \\
+\texttt{routes/} & Express route definitions: vaultRoutes, authRoutes \\
+\texttt{services/} & Business logic: vaultService, storageService, cleanupService \\
+\texttt{utils/} & HMAC computation, nanoid generation, error class \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================================
+\section{Features Implemented}
+
+\subsection{Base Requirements}
+
+\begin{enumerate}
+    \item \textbf{Upload text or files} -- users can upload plain text (displayed in a readonly editor) or any file type. Only one per vault.
+    \item \textbf{Unique shareable URL} -- generated using nanoid (21 chars, $\sim$128-bit entropy). Practically impossible to guess.
+    \item \textbf{View/copy text, download files} -- text vaults show content with a copy button. File vaults trigger browser download.
+    \item \textbf{Link-only access} -- no public listing, no search, no browsing. Invalid links return 403.
+    \item \textbf{Automatic expiry} -- default 10 minutes, configurable up to 24 hours. TTL index + cron cleanup.
+\end{enumerate}
+
+\subsection{Bonus Features}
+
+\begin{enumerate}
+    \item \textbf{Password-protected links} -- PBKDF2 + HKDF key derivation. Local password verification.
+    \item \textbf{One-time view links} -- set maxViews to 1.
+    \item \textbf{Max download/view count} -- configurable from 1 to 1000.
+    \item \textbf{Manual delete} -- delete token returned on upload. Dashboard delete for authenticated users.
+    \item \textbf{Authentication and user accounts} -- register, login, JWT, dashboard.
+    \item \textbf{File size limits and validation} -- chunk size limit via multer, magic number validation on client.
+    \item \textbf{Background cleanup job} -- cron every 5 min, purges expired vaults from DB and blob storage.
+    \item \textbf{User-based access control} -- dashboard shows owned vaults, extend expiry, delete.
+    \item \textbf{IP-based access restriction} -- optional per-vault IP whitelist.
+    \item \textbf{End-to-end encryption} -- AES-256-GCM, key in URL fragment.
+    \item \textbf{QR code} -- generated for every share link.
+    \item \textbf{Integrity verification} -- Merkle tree, HMAC, per-chunk SHA-256.
+\end{enumerate}
+
+% ============================================================
+\section{Design Decisions}
+
+\textbf{Why client-side encryption?}
+The server never touches plaintext. Even a compromised server cannot read user content. The key travels only in the URL hash fragment which browsers do not send in HTTP requests.
+
+\textbf{Why chunked uploads?}
+Large files must be split to stay within memory limits. Each chunk is encrypted independently, uploaded independently, and stored as a separate blob. This keeps memory usage bounded on both client and server.
+
+\textbf{Why Azure Blob Storage?}
+MongoDB has a 16 MB document limit. Binary data belongs in object storage. Azure streams blobs efficiently without loading them fully into memory. We store only metadata references in the DB.
+
+\textbf{Why nanoid for vault IDs?}
+21-character nanoid provides $\sim$128 bits of entropy. No sequential patterns, no timestamp leakage. Links are practically unguessable.
+
+\textbf{Why atomic view counting?}
+MongoDB's \texttt{findOneAndUpdate} with \texttt{\$inc} is atomic. Two concurrent requests cannot both consume the last view. No need for distributed locks.
+
+\textbf{Why separate metadata and access endpoints?}
+\texttt{GET /vaults/:id} returns metadata without consuming a view. The user sees vault info (size, type, remaining views) before committing. \texttt{POST /vaults/:id/access} is the actual burn-after-read trigger.
+
+\textbf{Why download session tokens?}
+After access, chunk downloads use a short-lived JWT (5-minute TTL). This prevents someone from bookmarking chunk URLs and downloading later without consuming a view.
+
+% ============================================================
+\section{Assumptions and Limitations}
+
+\begin{itemize}
+    \item Maximum file size is constrained by upload timeout and Azure limits. Tested up to $\sim$100 MB.
+    \item The encryption key in the URL fragment makes share links long. This is a deliberate security tradeoff.
+    \item Rate limiting uses in-memory storage by default. Resets on server restart. Redis can be configured for production.
+    \item No email verification on registration.
+    \item The cleanup cron runs inside the Node.js process. For production at scale, it should be a separate worker.
+    \item The P2P mode in the UI tracks tab presence via BroadcastChannel but does not perform actual WebRTC transfers. Downloads still go through the server.
+\end{itemize}
+
+% ============================================================
+\section{How to Run}
+
+\begin{enumerate}
+    \item Install Node.js v20+.
+    \item Clone the repository: \texttt{git clone https://github.com/devchaitanya/LinkVault.git}
+    \item Backend setup:
+    \begin{lstlisting}[language=bash]
+cd backend
+cp .env.example .env
+# Fill in MONGODB_URI, AZURE_STORAGE_CONNECTION_STRING, JWT_SECRET
+npm install
+node index.js
+    \end{lstlisting}
+    \item Frontend setup:
+    \begin{lstlisting}[language=bash]
+cd frontend
+npm install
+npm run dev
+    \end{lstlisting}
+    \item Open \texttt{http://localhost:5173} in the browser.
+\end{enumerate}
+
+% ============================================================
+\section{Conclusion}
+
+LinkVault implements a production-quality ephemeral content sharing system. All base requirements from the assignment are met, and 12 bonus features are implemented. The system is secure by design: content is encrypted before leaving the browser, keys never touch the server, and access policies are enforced atomically.
+
+\end{document}

@@ -1,24 +1,36 @@
 {
-  "name": "backend",
+  "name": "linkvault-backend",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "echo \"No tests yet\" && exit 0"
   },
-  "keywords": [],
+  "keywords": [
+    "e2e-encryption",
+    "ephemeral",
+    "file-sharing"
+  ],
   "author": "",
   "license": "ISC",
+  "description": "LinkVault — E2E encrypted ephemeral content sharing backend",
   "dependencies": {
+    "@azure/storage-blob": "^12.26.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^7.5.0",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.22.0",
     "multer": "^2.0.2",
+    "nanoid": "^5.1.6",
     "node-cron": "^4.2.1",
-    "uuid": "^13.0.0"
+    "redis": "^4.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
-  },
-  "description": ""
+  }
 }
