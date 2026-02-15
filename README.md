@@ -120,6 +120,12 @@ Base URL: `/api`
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
 
+### Utility
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/ip` | Returns the client's IP as seen by the server (used for IP restriction UI) |
+
 ---
 
 ## Database Schema
@@ -187,6 +193,9 @@ Indexes: `vaultId` (unique), `expiresAt` (TTL), `uploadStatus + createdAt` (clea
 **Why client-side encryption?**
 The server never has access to plaintext. Even if the database or blob storage is compromised, content is unreadable without the key fragment in the URL hash. The hash fragment (`#k=...`) is never sent to the server by browsers — it stays client-side only.
 
+**How does IP restriction work in dev and production?**
+In production, the backend sees the real client IP via `req.ip` (with `trust proxy` enabled). In local development, all requests appear to come from `127.0.0.1`, so the frontend fetches your public IP from https://api.ipify.org and sends it as the `X-Client-Public-IP` header. The backend uses this header for IP restriction checks if the request is from a private/loopback address. This ensures IP restriction works both locally and in production.
+
 **Why chunked uploads?**
 Large files need to be split. Each chunk is encrypted independently with AES-256-GCM (unique IV per chunk), uploaded separately, and stored as individual blobs in Azure. This keeps memory usage bounded and allows resumable uploads.
 
@@ -224,6 +233,8 @@ Global rate limit + stricter limits on auth endpoints and uploads. Uses in-memor
 - In-memory rate limiting resets on server restart. Use Redis in production for persistence.
 - No email verification on registration.
 - The cleanup cron runs inside the Node process. For production at scale, this should be a separate worker.
+
+- IP restriction works in local development because the frontend sends your public IP (detected via ipify) to the backend. In production, the backend uses the real client IP as seen by the reverse proxy.
 
 ---
 
