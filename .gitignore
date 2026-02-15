@@ -34,7 +34,7 @@ paste.txt
 # Test/draft PDFs
 test/
 link_valut.pdf
-Takehome.pdf
+# Takehome.pdf
 design_doc_link_vault.pdf
 
 # LaTeX build artifacts
