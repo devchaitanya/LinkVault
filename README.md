@@ -4,7 +4,7 @@ A secure, ephemeral content sharing app. Upload text or files, get a shareable l
 
 Everything is encrypted in the browser before it leaves the client. The server never sees plaintext content or decryption keys.
 
-**Live:** https://linkvault-app.azurewebsites.net
+<!-- **Live:** https://linkvault-app.azurewebsites.net -->
 
 ---
 
@@ -14,7 +14,7 @@ Everything is encrypted in the browser before it leaves the client. The server n
 
 - Node.js v20+
 - MongoDB (local or Atlas)
-- Azure Blob Storage account (or you can swap in any S3-compatible store)
+- Azure Blob Storage account 
 
 ### 1. Clone
 
@@ -229,4 +229,14 @@ Global rate limit + stricter limits on auth endpoints and uploads. Uses in-memor
 
 ## Data Flow Diagram
 
-See [DATAFLOW.md](DATAFLOW.md) for the full upload-to-storage and download-to-client data flow.
+See the full upload-to-storage and download-to-client data flow in:
+
+![Data Flow](dataflow.png)
+
+For details, see [DATAFLOW.md](DATAFLOW.md).
+
+## Database Schema Diagram
+
+See the database schema in:
+
+![Database Schema](database_schema.png)
